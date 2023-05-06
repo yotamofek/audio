@@ -128,6 +128,13 @@
 //! [Sequential]: https://docs.rs/audio/latest/audio/sequential/struct.Sequential.html
 //! [wrap]: https://docs.rs/audio/latest/audio/wrap/index.html
 
+#![feature(
+    core_intrinsics,
+    exact_size_is_empty,
+    iter_advance_by,
+    pointer_byte_offsets,
+    trusted_len
+)]
 #![cfg_attr(not(feature = "std"), no_std)]
 #![deny(missing_docs, rustdoc::broken_intra_doc_links)]
 #![allow(clippy::should_implement_trait)]

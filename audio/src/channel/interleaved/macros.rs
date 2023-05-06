@@ -74,47 +74,61 @@ macro_rules! iterator {
         // backwards by `n`. `n` must not exceed `self.len()`.
         macro_rules! zst_shrink {
             ($self: ident, $n: ident) => {
-                $self.end = ($self.end as *$raw_mut u8).wrapping_offset(-$n) as *$raw_mut T;
+                $self.end = $self.end.wrapping_byte_sub($n);
             }
         }
 
-        impl<'a, T> $name<'a, T> {
-            // Helper function for moving the start of the iterator forwards by
-            // `offset` elements, returning the old start. Unsafe because the
-            // offset must not exceed `self.len()`.
+        impl<'a, T> $name<'_, T> {
+            // Helper function for moving the start of the iterator forwards by `offset` elements,
+            // returning the old start.
+            // Unsafe because the offset must not exceed `self.len()`.
             #[inline(always)]
-            unsafe fn post_inc_start(&mut self, offset: isize) -> *$raw_mut T {
+            unsafe fn post_inc_start(&mut self, offset: usize) -> * $raw_mut T {
                 if mem::size_of::<T>() == 0 {
                     zst_shrink!(self, offset);
                     self.ptr.as_ptr()
                 } else {
-                    let offset = offset.saturating_mul(self.step as isize);
+                    // NOTE: this line is not present in original code
+                    let offset = offset.saturating_mul(self.step);
 
                     let old = self.ptr.as_ptr();
                     // SAFETY: the caller guarantees that `offset` doesn't exceed `self.len()`,
                     // so this new pointer is inside `self` and thus guaranteed to be non-null.
-                    self.ptr = ptr::NonNull::new_unchecked(self.ptr.as_ptr().wrapping_offset(offset));
+                    self.ptr = unsafe { ptr::NonNull::new_unchecked(self.ptr.as_ptr().add(offset)) };
                     old
                 }
             }
 
-            // Helper function for moving the end of the iterator backwards by
-            // `offset` elements, returning the new end. Unsafe because the
-            // offset must not exceed `self.len()`.
+            // Helper function for moving the end of the iterator backwards by `offset` elements,
+            // returning the new end.
+            // Unsafe because the offset must not exceed `self.len()`.
             #[inline(always)]
-            unsafe fn pre_dec_end(&mut self, offset: isize) -> *$raw_mut T {
+            unsafe fn pre_dec_end(&mut self, offset: usize) -> * $raw_mut T {
                 if mem::size_of::<T>() == 0 {
                     zst_shrink!(self, offset);
                     self.ptr.as_ptr()
                 } else {
-                    let offset = offset.saturating_mul(self.step as isize);
+                    // NOTE: this line is not present in original code
+                    let offset = offset.saturating_mul(self.step);
 
                     // SAFETY: the caller guarantees that `offset` doesn't exceed `self.len()`,
                     // which is guaranteed to not overflow an `isize`. Also, the resulting pointer
                     // is in bounds of `slice`, which fulfills the other requirements for `offset`.
-                    self.end = self.end.wrapping_offset(-offset);
+                    self.end = unsafe { self.end.sub(offset) };
                     self.end
                 }
+            }
+        }
+
+        impl<T> ExactSizeIterator for $name<'_, T> where T: Copy {
+            #[inline(always)]
+            fn len(&self) -> usize {
+                len!(self)
+            }
+
+            #[inline(always)]
+            fn is_empty(&self) -> bool {
+                is_empty!(self)
             }
         }
 
@@ -130,10 +144,10 @@ macro_rules! iterator {
                 // non-null end pointer. The call to `next_unchecked!` is safe
                 // since we check if the iterator is empty first.
                 unsafe {
-                    assert!(!self.ptr.as_ptr().is_null());
+                    intrinsics::assume(!self.ptr.as_ptr().is_null());
 
                     if mem::size_of::<T>() != 0 {
-                        assert!(!self.end.is_null());
+                        intrinsics::assume(!self.end.is_null());
                     }
 
                     if is_empty!(self) {
@@ -169,15 +183,21 @@ macro_rules! iterator {
                             self.ptr = ptr::NonNull::new_unchecked(self.end as *mut T);
                         }
                     }
-
                     return None;
                 }
-
                 // SAFETY: We are in bounds. `post_inc_start` does the right thing even for ZSTs.
                 unsafe {
-                    self.post_inc_start(n as isize);
+                    self.post_inc_start(n);
                     Some(next_unchecked!(self))
                 }
+            }
+
+            #[inline]
+            fn advance_by(&mut self, n: usize) -> Result<(), num::NonZeroUsize> {
+                let advance = cmp::min(len!(self), n);
+                // SAFETY: By construction, `advance` does not exceed `self.len()`.
+                unsafe { self.post_inc_start(advance) };
+                num::NonZeroUsize::new(n - advance).map_or(Ok(()), Err)
             }
         }
 
@@ -191,10 +211,10 @@ macro_rules! iterator {
                 // The call to `next_back_unchecked!` is safe since we check if the iterator is
                 // empty first.
                 unsafe {
-                    assert!(!self.ptr.as_ptr().is_null());
+                    intrinsics::assume(!self.ptr.as_ptr().is_null());
 
                     if mem::size_of::<T>() != 0 {
-                        assert!(!self.end.is_null());
+                        intrinsics::assume(!self.end.is_null());
                     }
 
                     if is_empty!(self) {
@@ -212,14 +232,25 @@ macro_rules! iterator {
                     self.end = self.ptr.as_ptr();
                     return None;
                 }
-
                 // SAFETY: We are in bounds. `pre_dec_end` does the right thing even for ZSTs.
                 unsafe {
-                    self.pre_dec_end(n as isize);
+                    self.pre_dec_end(n);
                     Some(next_back_unchecked!(self))
                 }
             }
+
+            #[inline]
+            fn advance_back_by(&mut self, n: usize) -> Result<(), num::NonZeroUsize> {
+                let advance = cmp::min(len!(self), n);
+                // SAFETY: By construction, `advance` does not exceed `self.len()`.
+                unsafe { self.pre_dec_end(advance) };
+                num::NonZeroUsize::new(n - advance).map_or(Ok(()), Err)
+            }
         }
+
+        impl<T> iter::FusedIterator for $name<'_, T> where T: Copy {}
+
+        unsafe impl<T> iter::TrustedLen for $name<'_, T> where T: Copy {}
     }
 }
 

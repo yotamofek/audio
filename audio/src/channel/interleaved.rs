@@ -2,8 +2,11 @@
 
 use core::cmp;
 use core::fmt;
+use core::intrinsics;
+use core::iter;
 use core::marker;
 use core::mem;
+use core::num;
 use core::ptr;
 
 use audio_core::{Channel, ChannelMut};
